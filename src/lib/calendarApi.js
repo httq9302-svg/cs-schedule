@@ -100,8 +100,9 @@ export function googleEventToSchedule(event) {
   const team = teamMatch ? teamMatch[1] : detectTeamByTime(rawStart)
   const fixedTime = TEAM_TIME[team] || TEAM_TIME['A']
 
-  // 제목 파싱: "담당자 / 업무내용" 형식
-  const rawTitle = event.summary || '새 일정'
+  // 제목 파싱: "담당자 / 업무내용" 형식 (앞의 상태 태그 제거)
+  const rawTitleFull = event.summary || '새 일정'
+  const rawTitle = rawTitleFull.replace(/^\[(완료|특이|진행중|예정)\]\s*/, '')
   let member = '미배정'
   let cleanTitle = rawTitle
   const slashIdx = rawTitle.indexOf(' / ')

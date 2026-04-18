@@ -120,8 +120,15 @@ export default function SyncPage() {
         const endHour = startHour
         const endMin = 30
         const dateStr = workDate
+        // 상태별 제목 태그 및 구글 캘린더 색상 ID
+        // 구글 캘린더 colorId: 1=라벤더 2=세이지 3=포도 4=플라밍고 5=바나나
+        //   6=탠저린 7=공작새 8=블루베리 9=바질 10=토마토 11=포그
+        const statusTag = s.status === '완료' ? '[완료] ' : s.status === '특이' ? '[특이] ' : s.status === '진행중' ? '[진행중] ' : ''
+        const colorId = s.status === '완료' ? '8' : s.status === '특이' ? '11' : s.status === '진행중' ? '5' : undefined
+        const baseTitle = s.member && s.member !== '미배정' ? `${s.member} / ${s.title}` : s.title
         const eventBody = {
-          summary: s.member && s.member !== '미배정' ? `${s.member} / ${s.title}` : s.title,
+          summary: `${statusTag}${baseTitle}`,
+          ...(colorId ? { colorId } : {}),
           location: s.location || s.address || '',
           description: [s.memo ? `메모: ${s.memo}` : '', `팀: ${s.team}팀`, `담당자: ${s.member || '미배정'}`, `상태: ${s.status || '예정'}`, s.phone ? `연락처: ${s.phone}` : ''].filter(Boolean).join('\n'),
           start: {

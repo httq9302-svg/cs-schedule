@@ -125,12 +125,19 @@ export function signIn(forceConsent = false) {
   })
 }
 
-// ── 팝업 없이 조용히 토큰 갱신 시도 ─────────────────────────────────────────
-// 실패하면 false 반환 (로그인 필요)
+// ── 팝업 없이 조용히 토큰 갱신 시도 (3초 타임아웃) ──────────────────────────
+// 실패하거나 타임아웃이면 false 반환
 export function silentSignIn() {
   return new Promise((resolve) => {
     if (!tokenClient) { resolve(false); return }
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; resolve(false) }
+    }, 3000)
     tokenClient.callback = (resp) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
       if (resp.error) { resolve(false); return }
       saveToken(resp)
       resolve(true)

@@ -8,6 +8,7 @@ import {
   signOut,
   isSignedIn,
   ensureValidToken,
+  silentSignIn,
   listCalendars,
   fetchAllEvents,
   createEvent,
@@ -102,7 +103,13 @@ export default function SyncPage() {
         setSignedIn(alreadySignedIn)
         if (alreadySignedIn) {
           try {
-            await ensureValidToken()
+            // 저장된 토큰 복원 시도 (팝업 없이)
+            const ok = await silentSignIn()
+            if (!ok) {
+              // 조용히 실패하면 로그인 필요 상태로
+              setSignedIn(false)
+              return
+            }
             const cals = await listCalendars()
             setCalendars(cals)
             const savedCalId = state.googleCalendarId
@@ -125,12 +132,7 @@ export default function SyncPage() {
   const handleSignIn = async () => {
     setLoading(true)
     try {
-      // 먼저 팝업 없이 시도, 실패 시 동의 화면 표시
-      try {
-        await signIn(false) // prompt: 'none'
-      } catch {
-        await signIn(true)  // prompt: 'consent' (fallback)
-      }
+      await signIn(true) // 로그인 팝업 (동의 화면)
       setSignedIn(true)
       actions.setGoogleConnected(true)
       const cals = await listCalendars()

@@ -14,85 +14,68 @@ const AUTO_SYNC_INTERVAL = 5 * 60 * 1000 // 5분
 export default function SyncPage() {
   const { state, actions } = useStore()
   const [loading, setLoading] = useState(false)
-  const [connected, setConnected] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState(null)
   const [nextSyncIn, setNextSyncIn] = useState(null)
   const [syncError, setSyncError] = useState('')
-  const autoSyncTimer = useRef(null)
   const countdownTimer = useRef(null)
 
-  // ── 가져오기 핵심 로직 ────────────────────────────────────────────────────
-  const doImport = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true)
+  // 연결 상태는 store에서 읽기
+  const connected = state.googleConnected
+
+  // 카운트다운 표시 (수동 동기화 후 5분 카운트다운)
+  const startCountdown = useCallback(() => {
+    if (countdownTimer.current) clearInterval(countdownTimer.current)
+    setNextSyncIn(AUTO_SYNC_INTERVAL / 1000)
+    countdownTimer.current = setInterval(() => {
+      setNextSyncIn(prev => {
+        if (prev <= 1) {
+          clearInterval(countdownTimer.current)
+          return null
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }, [])
+
+  useEffect(() => {
+    // 이미 연결됐으면 카운트다운 시작
+    if (connected) {
+      setLastSyncTime(dayjs())
+      startCountdown()
+    }
+    return () => {
+      if (countdownTimer.current) clearInterval(countdownTimer.current)
+    }
+  }, []) // eslint-disable-line
+
+  // ── 수동 가져오기 ─────────────────────────────────────────────────────────
+  const handleImport = async () => {
+    setLoading(true)
     setSyncError('')
     try {
       const events = await fetchAllEvents()
-
       let nextId = Math.max(...state.schedules.map(s => s.id || 0), 0) + 1
       const mapped = events.map(ev => {
         const s = googleEventToSchedule(ev)
         s.id = s.id || nextId++
         return s
       })
-
       actions.importFromGoogle(mapped)
-
+      actions.setGoogleConnected(true)
       const now = dayjs()
       setLastSyncTime(now)
-      setConnected(true)
-      setNextSyncIn(AUTO_SYNC_INTERVAL / 1000)
-
-      const msg = silent
-        ? `자동 동기화 완료 (${mapped.length}개)`
-        : `가져오기 완료 (${mapped.length}개 일정)`
-
-      actions.addSyncLog({ time: now.format('HH:mm'), type: 'import', msg, ok: true })
+      startCountdown()
+      actions.addSyncLog({ time: now.format('HH:mm'), type: 'import', msg: `가져오기 완료 (${mapped.length}개 일정)`, ok: true })
     } catch (e) {
       const errMsg = e?.message || String(e)
       setSyncError(errMsg)
-      setConnected(false)
-      if (!silent) {
-        actions.addSyncLog({
-          time: dayjs().format('HH:mm'),
-          type: 'import',
-          msg: `가져오기 실패: ${errMsg}`,
-          ok: false,
-        })
-      }
+      actions.setGoogleConnected(false)
+      actions.addSyncLog({ time: dayjs().format('HH:mm'), type: 'import', msg: `가져오기 실패: ${errMsg}`, ok: false })
     }
-    if (!silent) setLoading(false)
-  }, [state.schedules, actions])
-
-  // ── 5분 자동 동기화 ───────────────────────────────────────────────────────
-  const startAutoSync = useCallback(() => {
-    if (autoSyncTimer.current) clearInterval(autoSyncTimer.current)
-    if (countdownTimer.current) clearInterval(countdownTimer.current)
-    setNextSyncIn(AUTO_SYNC_INTERVAL / 1000)
-    autoSyncTimer.current = setInterval(() => doImport(true), AUTO_SYNC_INTERVAL)
-    countdownTimer.current = setInterval(() => {
-      setNextSyncIn(prev => (prev <= 1 ? AUTO_SYNC_INTERVAL / 1000 : prev - 1))
-    }, 1000)
-  }, [doImport])
-
-  const stopAutoSync = useCallback(() => {
-    if (autoSyncTimer.current) clearInterval(autoSyncTimer.current)
-    if (countdownTimer.current) clearInterval(countdownTimer.current)
-    setNextSyncIn(null)
-  }, [])
-
-  // ── 앱 시작 시 자동 가져오기 ──────────────────────────────────────────────
-  useEffect(() => {
-    doImport(true).then(() => startAutoSync())
-    return () => stopAutoSync()
-  }, []) // eslint-disable-line
-
-  // ── 수동 가져오기 ─────────────────────────────────────────────────────────
-  const handleImport = async () => {
-    await doImport(false)
-    startAutoSync()
+    setLoading(false)
   }
 
-  // ── 반영하기 (앱 → 구글) ──────────────────────────────────────────────────
+  // ── 수동 반영하기 (앱 → 구글) ─────────────────────────────────────────────
   const handleExport = async () => {
     setLoading(true)
     let successCount = 0
@@ -102,27 +85,17 @@ export default function SyncPage() {
     const targetSchedules = state.schedules.filter(s => (s.workDate || s.date) >= today)
 
     if (targetSchedules.length === 0) {
-      actions.addSyncLog({
-        time: dayjs().format('HH:mm'),
-        type: 'export',
-        msg: '반영할 일정이 없습니다.',
-        ok: false,
-      })
+      actions.addSyncLog({ time: dayjs().format('HH:mm'), type: 'export', msg: '반영할 일정이 없습니다.', ok: false })
       setLoading(false)
       return
     }
 
     for (const s of targetSchedules) {
       try {
-        // 구글 이벤트 바디 구성
         const workDate = s.workDate || s.date
         const startHour = s.team === 'A' ? 9 : s.team === 'B' ? 12 : s.team === 'C' ? 15 : 18
         const endHour = startHour
         const endMin = 30
-        const dateStr = workDate
-        // 상태별 제목 태그 및 구글 캘린더 색상 ID
-        // 구글 캘린더 colorId: 1=라벤더 2=세이지 3=포도 4=플라밍고 5=바나나
-        //   6=탠저린 7=공작새 8=블루베리 9=바질 10=토마토 11=포그
         const statusTag = s.status === '완료' ? '[완료] ' : s.status === '특이' ? '[특이] ' : s.status === '진행중' ? '[진행중] ' : ''
         const colorId = s.status === '완료' ? '8' : s.status === '특이' ? '11' : s.status === '진행중' ? '5' : undefined
         const baseTitle = s.member && s.member !== '미배정' ? `${s.member} / ${s.title}` : s.title
@@ -130,17 +103,22 @@ export default function SyncPage() {
           summary: `${statusTag}${baseTitle}`,
           ...(colorId ? { colorId } : {}),
           location: s.location || s.address || '',
-          description: [s.memo ? `메모: ${s.memo}` : '', `팀: ${s.team}팀`, `담당자: ${s.member || '미배정'}`, `상태: ${s.status || '예정'}`, s.phone ? `연락처: ${s.phone}` : ''].filter(Boolean).join('\n'),
+          description: [
+            s.memo ? `메모: ${s.memo}` : '',
+            `팀: ${s.team}팀`,
+            `담당자: ${s.member || '미배정'}`,
+            `상태: ${s.status || '예정'}`,
+            s.phone ? `연락처: ${s.phone}` : '',
+          ].filter(Boolean).join('\n'),
           start: {
-            dateTime: `${dateStr}T${String(startHour).padStart(2, '0')}:00:00+09:00`,
+            dateTime: `${workDate}T${String(startHour).padStart(2, '0')}:00:00+09:00`,
             timeZone: 'Asia/Seoul',
           },
           end: {
-            dateTime: `${dateStr}T${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}:00+09:00`,
+            dateTime: `${workDate}T${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}:00+09:00`,
             timeZone: 'Asia/Seoul',
           },
         }
-
         if (s.googleEventId) {
           await updateEvent(s.googleEventId, eventBody)
         } else {
@@ -235,6 +213,12 @@ export default function SyncPage() {
               <p className="text-xs text-red-600">{syncError}</p>
             </div>
           )}
+
+          {/* 자동 반영 안내 */}
+          <div className="mt-3 bg-emerald-50 rounded-xl p-3">
+            <p className="text-xs text-emerald-700 font-medium">✓ 자동 반영 활성화</p>
+            <p className="text-xs text-emerald-600 mt-0.5">앱에서 수정하면 3초 후 구글 캘린더에 자동으로 반영됩니다.</p>
+          </div>
         </div>
 
         {/* 동기화 버튼 */}
@@ -262,8 +246,8 @@ export default function SyncPage() {
               <Upload size={20} className="text-white" />
             </div>
             <div className="text-center">
-              <p className="text-sm font-semibold text-white">반영하기</p>
-              <p className="text-xs text-slate-400 mt-0.5">앱 수정 → 구글 캘린더</p>
+              <p className="text-sm font-semibold text-white">전체 반영</p>
+              <p className="text-xs text-slate-400 mt-0.5">전체 수동 반영</p>
             </div>
           </button>
         </div>

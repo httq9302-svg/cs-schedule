@@ -56,66 +56,94 @@ export async function deleteEvent(eventId) {
   return true
 }
 
+// ── 팀별 고정 시간 ──────────────────────────────────────────────────────────
+const TEAM_TIME = {
+  A: { start: '09:00', end: '09:30' },
+  B: { start: '12:00', end: '12:30' },
+  C: { start: '15:00', end: '15:30' },
+  D: { start: '18:00', end: '18:30' },
+}
+
+function detectTeamByTime(timeStr) {
+  const h = parseInt(timeStr.slice(0, 2), 10)
+  if (h >= 6  && h < 11) return 'A'
+  if (h >= 11 && h < 14) return 'B'
+  if (h >= 14 && h < 17) return 'C'
+  if (h >= 17 && h < 22) return 'D'
+  return 'A'
+}
+
 // ── 구글 이벤트 → 앱 스케줄 변환 ──────────────────────────────────────────
+// 앱이 기대하는 필드: team, member, title, date, start, end, location, phone, status, memo
 export function googleEventToSchedule(event) {
   const startRaw = event.start?.dateTime || event.start?.date || ''
   const endRaw = event.end?.dateTime || event.end?.date || ''
 
-  // 날짜 추출 (YYYY-MM-DD)
+  // 날짜 추출 (YYYY-MM-DD) - KST 기준
   let date = ''
+  let rawStart = '09:00'
   if (startRaw.includes('T')) {
-    // dateTime 형식 → 로컬 날짜로 변환
     const d = new Date(startRaw)
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    date = `${y}-${m}-${day}`
+    // KST 변환 (UTC+9)
+    const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000)
+    date = kst.toISOString().slice(0, 10)
+    rawStart = kst.toISOString().slice(11, 16)
   } else {
     date = startRaw.slice(0, 10)
   }
 
-  // 시작 시간 추출 (HH:MM)
-  let startTime = ''
-  let endTime = ''
-  if (startRaw.includes('T')) {
-    const d = new Date(startRaw)
-    startTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-    const e = new Date(endRaw)
-    endTime = `${String(e.getHours()).padStart(2, '0')}:${String(e.getMinutes()).padStart(2, '0')}`
-  }
+  // description 파싱
+  const desc = event.description || ''
 
-  // 팀 결정 (시간 기준)
-  const hour = startTime ? parseInt(startTime.split(':')[0]) : -1
-  let team = ''
-  if (hour === 9) team = 'A'
-  else if (hour === 12) team = 'B'
-  else if (hour === 15) team = 'C'
-  else if (hour === 18) team = 'D'
+  // 팀 결정: description의 "팀: X팀" 우선, 없으면 시간 기반
+  const teamMatch = desc.match(/팀:\s*([ABCD])팀/)
+  const team = teamMatch ? teamMatch[1] : detectTeamByTime(rawStart)
+  const fixedTime = TEAM_TIME[team] || TEAM_TIME['A']
 
-  // 제목 파싱: "담당자 / 업무내용" 또는 "담당자/ 업무내용"
-  const rawTitle = event.summary || ''
-  let assignee = ''
-  let title = rawTitle
-  const slashIdx = rawTitle.indexOf('/')
+  // 제목 파싱: "담당자 / 업무내용" 형식
+  const rawTitle = event.summary || '새 일정'
+  let member = '미배정'
+  let cleanTitle = rawTitle
+  const slashIdx = rawTitle.indexOf(' / ')
   if (slashIdx > 0) {
-    assignee = rawTitle.slice(0, slashIdx).trim()
-    title = rawTitle.slice(slashIdx + 1).trim()
+    member = rawTitle.slice(0, slashIdx).trim()
+    cleanTitle = rawTitle.slice(slashIdx + 3).trim()
+  } else {
+    // "담당자/ 업무내용" (공백 없는 경우도 처리)
+    const slashIdx2 = rawTitle.indexOf('/')
+    if (slashIdx2 > 0) {
+      member = rawTitle.slice(0, slashIdx2).trim()
+      cleanTitle = rawTitle.slice(slashIdx2 + 1).trim()
+    }
   }
+
+  // description에서 담당자 덮어쓰기
+  const memberMatch = desc.match(/담당자:\s*(.+?)(?:\n|$)/)
+  if (memberMatch && memberMatch[1].trim() !== '미배정') {
+    member = memberMatch[1].trim()
+  }
+
+  // 상태, 메모, 연락처 파싱
+  const statusMatch = desc.match(/상태:\s*(\S+)/)
+  const status = statusMatch ? statusMatch[1] : '예정'
+  const memoMatch = desc.match(/메모:\s*(.+?)(?:\n|$)/)
+  const memo = memoMatch ? memoMatch[1].trim() : ''
+  const phoneMatch = desc.match(/연락처:\s*(.+?)(?:\n|$)/)
+  const phone = phoneMatch ? phoneMatch[1].trim() : ''
 
   return {
-    id: event.id,
+    id: event.id,                  // 임시 ID (importFromGoogle에서 덮어씀)
     googleEventId: event.id,
-    date,
-    workDate: date,
-    originalDate: date,
     team,
-    startTime,
-    endTime,
-    title,
-    assignee,
-    address: event.location || '',
-    phone: '',
-    memo: event.description || '',
-    status: 'pending',
+    member,
+    title: cleanTitle,
+    date,
+    start: fixedTime.start,        // 앱이 기대하는 필드명: start
+    end: fixedTime.end,            // 앱이 기대하는 필드명: end
+    location: event.location || '', // 앱이 기대하는 필드명: location
+    phone,
+    status,
+    memo,
+    originalDate: null,
   }
 }

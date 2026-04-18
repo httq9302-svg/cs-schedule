@@ -121,9 +121,9 @@ export default function SyncPage() {
         const endMin = 30
         const dateStr = workDate
         const eventBody = {
-          summary: s.assignee ? `${s.assignee} / ${s.title}` : s.title,
-          location: s.address || '',
-          description: s.memo || '',
+          summary: s.member && s.member !== '미배정' ? `${s.member} / ${s.title}` : s.title,
+          location: s.location || s.address || '',
+          description: [s.memo ? `메모: ${s.memo}` : '', `팀: ${s.team}팀`, `담당자: ${s.member || '미배정'}`, `상태: ${s.status || '예정'}`, s.phone ? `연락처: ${s.phone}` : ''].filter(Boolean).join('\n'),
           start: {
             dateTime: `${dateStr}T${String(startHour).padStart(2, '0')}:00:00+09:00`,
             timeZone: 'Asia/Seoul',

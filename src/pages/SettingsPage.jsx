@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, X, ChevronDown, ChevronUp, Info, Shield } from 'lucide-react'
+import { Plus, X, ChevronDown, ChevronUp, Info, Shield, ExternalLink, Copy, Check } from 'lucide-react'
 import { useStore } from '@/store/useStore.jsx'
 
 const TEAMS = [
@@ -73,10 +73,30 @@ function TeamSection({ team, members, onAdd, onRemove }) {
   )
 }
 
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex items-center gap-1 text-xs text-blue-600 font-medium active:text-blue-800"
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? '복사됨' : '복사'}
+    </button>
+  )
+}
+
 export default function SettingsPage() {
   const { state, actions } = useStore()
   const [calendarId, setCalendarId] = useState(state.googleCalendarId)
   const [saved, setSaved] = useState(false)
+  const [showGuide, setShowGuide] = useState(false)
 
   const handleSaveCalendarId = () => {
     actions.setGoogleCalendarId(calendarId.trim())
@@ -119,46 +139,85 @@ export default function SettingsPage() {
         <section>
           <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">구글 캘린더 연동</h2>
           <div className="bg-white rounded-2xl p-4 shadow-sm space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5">공유 캘린더 ID</label>
-              <div className="flex gap-2">
-                <input
-                  value={calendarId}
-                  onChange={e => setCalendarId(e.target.value)}
-                  placeholder="team@company.com 또는 캘린더 ID"
-                  className="flex-1 h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/15"
-                />
-                <button
-                  onClick={handleSaveCalendarId}
-                  className={`px-4 h-11 rounded-xl text-sm font-semibold transition-all ${
-                    saved ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white active:bg-slate-700'
-                  }`}
-                >
-                  {saved ? '저장됨 ✓' : '저장'}
-                </button>
-              </div>
-              <p className="mt-1.5 text-xs text-slate-400">
-                구글 캘린더 → 설정 → 캘린더 설정 → '캘린더 ID'에서 확인
-              </p>
-            </div>
 
-            <div className="flex items-center gap-2 py-2 border-t border-slate-50">
-              <span className={`w-2 h-2 rounded-full ${state.googleConnected ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-              <span className="text-sm text-slate-600">
-                {state.googleConnected ? '구글 계정 연결됨' : '미연결 (동기화 탭에서 로그인)'}
+            {/* 현재 연결된 캘린더 */}
+            <div className="flex items-center justify-between py-1">
+              <div>
+                <p className="text-xs font-semibold text-slate-500">현재 연결된 캘린더</p>
+                <p className="text-sm font-medium text-slate-900 mt-0.5">
+                  {state.googleCalendarId || 'firstoa8@gmail.com'}
+                </p>
+              </div>
+              <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                state.googleConnected
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-slate-100 text-slate-500'
+              }`}>
+                {state.googleConnected ? '연결됨' : '확인 중'}
               </span>
             </div>
 
-            <div className="bg-blue-50 rounded-xl p-3 flex gap-2">
-              <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
-              <div className="text-xs text-blue-700 space-y-1">
-                <p className="font-semibold">Google Cloud Console 설정 필요</p>
-                <p>1. Calendar API 활성화</p>
-                <p>2. OAuth 2.0 클라이언트 ID 생성 (웹 앱)</p>
-                <p>3. .env 파일에 VITE_GOOGLE_CLIENT_ID, VITE_GOOGLE_API_KEY 설정</p>
-                <p>4. 승인된 JavaScript 원본에 앱 URL 추가</p>
+            {/* 캘린더 변경 안내 버튼 */}
+            <button
+              onClick={() => setShowGuide(o => !o)}
+              className="w-full flex items-center justify-between py-2.5 px-3 bg-blue-50 rounded-xl active:bg-blue-100 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <Info size={14} className="text-blue-500" />
+                <span className="text-sm font-semibold text-blue-700">다른 캘린더로 변경하는 방법</span>
               </div>
-            </div>
+              {showGuide
+                ? <ChevronUp size={14} className="text-blue-400" />
+                : <ChevronDown size={14} className="text-blue-400" />
+              }
+            </button>
+
+            {showGuide && (
+              <div className="bg-blue-50 rounded-xl p-4 space-y-3 text-xs text-blue-800">
+                <p className="font-bold text-sm text-blue-900">캘린더 변경 방법 (2단계)</p>
+
+                {/* 1단계 */}
+                <div className="space-y-1.5">
+                  <p className="font-semibold text-blue-800">① 새 캘린더에 서비스 계정 공유</p>
+                  <p className="text-blue-700 leading-relaxed">
+                    구글 캘린더 → 변경할 캘린더 설정 → <strong>특정 사용자와 공유</strong>에서 아래 서비스 계정 이메일을 추가하고 <strong>"일정 변경 가능"</strong> 권한 부여
+                  </p>
+                  <div className="bg-white rounded-lg p-2.5 flex items-center justify-between gap-2">
+                    <code className="text-xs text-slate-700 break-all flex-1">
+                      cs-schedule-sync@gen-lang-client-0911669357.iam.gserviceaccount.com
+                    </code>
+                    <CopyButton text="cs-schedule-sync@gen-lang-client-0911669357.iam.gserviceaccount.com" />
+                  </div>
+                </div>
+
+                {/* 2단계 */}
+                <div className="space-y-1.5">
+                  <p className="font-semibold text-blue-800">② Vercel 환경변수 변경</p>
+                  <p className="text-blue-700 leading-relaxed">
+                    <a
+                      href="https://vercel.com/httq9302-8629s-projects/cs-schedule/settings/environment-variables"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline font-semibold"
+                    >
+                      Vercel 환경변수 설정 페이지 →
+                    </a>
+                    에서 <code className="bg-white px-1 rounded">VITE_GOOGLE_CALENDAR_ID</code> 값을 새 캘린더 ID로 변경 후 재배포
+                  </p>
+                  <p className="text-blue-600 text-[11px]">
+                    캘린더 ID 확인: 구글 캘린더 → 캘린더 설정 → 하단 "캘린더 ID" (예: abc123@group.calendar.google.com)
+                  </p>
+                </div>
+
+                {/* 개인 계정 캘린더 */}
+                <div className="bg-white rounded-lg p-2.5">
+                  <p className="font-semibold text-blue-800 mb-1">개인 계정 기본 캘린더인 경우</p>
+                  <p className="text-blue-700 leading-relaxed">
+                    캘린더 ID = 구글 계정 이메일 주소 (예: <code>yourname@gmail.com</code>)
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </section>
 

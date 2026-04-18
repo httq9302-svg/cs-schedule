@@ -1,22 +1,16 @@
 /**
  * Google Calendar API v3 연동 모듈
- *
- * 사용 전 Google Cloud Console에서:
- * 1. Calendar API 활성화
- * 2. OAuth 2.0 클라이언트 ID 생성 (웹 애플리케이션)
- * 3. 승인된 JavaScript 원본에 앱 URL 추가
- * 4. .env 파일에 VITE_GOOGLE_CLIENT_ID, VITE_GOOGLE_API_KEY 설정
  */
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
 const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || ''
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'
 const SCOPES = 'https://www.googleapis.com/auth/calendar'
+const TOKEN_STORAGE_KEY = 'cs_google_token_v1'
 
 let gapiInited = false
 let gisInited = false
 let tokenClient = null
-const TOKEN_STORAGE_KEY = 'cs_google_token_v1'
 
 // ── 팀별 고정 시간 (회사 룰) ─────────────────────────────────────────────────
 const TEAM_TIME = {
@@ -29,11 +23,11 @@ const TEAM_TIME = {
 // 시간(HH:mm)으로 팀 판별
 function detectTeamByTime(timeStr) {
   const h = parseInt(timeStr.slice(0, 2), 10)
-  if (h >= 6 && h < 11)  return 'A'  // 오전 9시 블록
-  if (h >= 11 && h < 14) return 'B'  // 오후 12시 블록
-  if (h >= 14 && h < 17) return 'C'  // 오후 3시 블록
-  if (h >= 17 && h < 22) return 'D'  // 오후 6시 블록
-  return 'A' // 기본값
+  if (h >= 6 && h < 11)  return 'A'
+  if (h >= 11 && h < 14) return 'B'
+  if (h >= 14 && h < 17) return 'C'
+  if (h >= 17 && h < 22) return 'D'
+  return 'A'
 }
 
 // ─── 초기화 ───────────────────────────────────────────────────────────────────
@@ -73,40 +67,43 @@ function loadScript(src) {
   })
 }
 
-// ─── 로그인 ───────────────────────────────────────────────────────────────────
+// ─── 로그인 (팝업) ────────────────────────────────────────────────────────────
 export function signIn(forceConsent = false) {
   return new Promise((resolve, reject) => {
     if (!tokenClient) { reject(new Error('초기화 필요')); return }
     tokenClient.callback = (resp) => {
       if (resp.error) { reject(resp); return }
-      // 토큰 만료 시간 저장 (1시간)
+      // 토큰 만료 시간 저장
       const expiry = Date.now() + (resp.expires_in || 3600) * 1000
       try { localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify({ expiry })) } catch {}
       resolve(resp)
     }
-    // 이미 토큰 있으면 prompt 없이 조용히 갱신
     tokenClient.requestAccessToken({ prompt: forceConsent ? 'consent' : '' })
   })
 }
 
-// 토큰 만료 여부 확인 후 자동 갱신
-export async function ensureToken() {
-  const token = window.gapi?.client?.getToken()
-  if (token) return // 이미 유효한 토큰 있음
-  // 저장된 만료 시간 확인
+// ─── 토큰 자동 갱신 (팝업 없이) ──────────────────────────────────────────────
+// API 호출 전 항상 이 함수를 먼저 호출해야 함
+export async function ensureValidToken() {
+  // 이미 gapi에 토큰이 있으면 OK
+  const existing = window.gapi?.client?.getToken()
+  if (existing?.access_token) return
+
+  // localStorage에서 만료 시간 확인
   try {
     const raw = localStorage.getItem(TOKEN_STORAGE_KEY)
     if (raw) {
       const { expiry } = JSON.parse(raw)
       if (Date.now() < expiry - 60000) {
-        // 아직 유효 → 팝업 없이 갱신 시도
+        // 아직 유효 → 팝업 없이 조용히 토큰 갱신 시도
         await signIn(false)
         return
       }
     }
   } catch {}
-  // 만료됐거나 기록 없으면 로그인 필요
-  throw new Error('로그인이 필요합니다')
+
+  // 만료됐거나 기록 없으면 명시적 로그인 필요
+  throw new Error('로그인이 필요합니다. 구글 로그인 버튼을 눌러주세요.')
 }
 
 export function signOut() {
@@ -115,11 +112,11 @@ export function signOut() {
     window.google.accounts.oauth2.revoke(token.access_token)
     window.gapi.client.setToken('')
   }
+  try { localStorage.removeItem(TOKEN_STORAGE_KEY) } catch {}
 }
 
 export function isSignedIn() {
-  if (window.gapi?.client?.getToken()) return true
-  // 저장된 토큰 만료 시간으로도 판단
+  if (window.gapi?.client?.getToken()?.access_token) return true
   try {
     const raw = localStorage.getItem(TOKEN_STORAGE_KEY)
     if (raw) {
@@ -132,12 +129,16 @@ export function isSignedIn() {
 
 // ─── 캘린더 목록 ───────────────────────────────────────────────────────────────
 export async function listCalendars() {
+  await ensureValidToken()
   const res = await window.gapi.client.calendar.calendarList.list()
   return res.result.items || []
 }
 
-// ─── 이벤트 조회 (오늘 하루) ──────────────────────────────────────────────────
+// ─── 이벤트 조회 (날짜 범위, 한국 시간 기준) ──────────────────────────────────
 export async function fetchEvents(calendarId, dateStr) {
+  await ensureValidToken()
+  // 한국 시간 기준 하루 전체 (UTC로 변환하면 전날 15:00 ~ 당일 14:59)
+  // 넉넉하게 ±1일 범위로 가져와서 날짜 필터링
   const timeMin = `${dateStr}T00:00:00+09:00`
   const timeMax = `${dateStr}T23:59:59+09:00`
   const res = await window.gapi.client.calendar.events.list({
@@ -146,13 +147,32 @@ export async function fetchEvents(calendarId, dateStr) {
     timeMax,
     singleEvents: true,
     orderBy: 'startTime',
-    maxResults: 100,
+    maxResults: 200,
+    timeZone: 'Asia/Seoul',
+  })
+  return res.result.items || []
+}
+
+// ─── 날짜 범위 이벤트 조회 (가져오기 범위 확장용) ─────────────────────────────
+export async function fetchEventsRange(calendarId, startDate, endDate) {
+  await ensureValidToken()
+  const timeMin = `${startDate}T00:00:00+09:00`
+  const timeMax = `${endDate}T23:59:59+09:00`
+  const res = await window.gapi.client.calendar.events.list({
+    calendarId,
+    timeMin,
+    timeMax,
+    singleEvents: true,
+    orderBy: 'startTime',
+    maxResults: 500,
+    timeZone: 'Asia/Seoul',
   })
   return res.result.items || []
 }
 
 // ─── 이벤트 생성 ───────────────────────────────────────────────────────────────
 export async function createEvent(calendarId, schedule) {
+  await ensureValidToken()
   const event = scheduleToGoogleEvent(schedule)
   const res = await window.gapi.client.calendar.events.insert({ calendarId, resource: event })
   return res.result
@@ -160,6 +180,7 @@ export async function createEvent(calendarId, schedule) {
 
 // ─── 이벤트 수정 ───────────────────────────────────────────────────────────────
 export async function updateEvent(calendarId, eventId, schedule) {
+  await ensureValidToken()
   const event = scheduleToGoogleEvent(schedule)
   const res = await window.gapi.client.calendar.events.update({
     calendarId,
@@ -171,69 +192,92 @@ export async function updateEvent(calendarId, eventId, schedule) {
 
 // ─── 이벤트 삭제 ───────────────────────────────────────────────────────────────
 export async function deleteEvent(calendarId, eventId) {
+  await ensureValidToken()
   await window.gapi.client.calendar.events.delete({ calendarId, eventId })
 }
 
 // ─── 변환 유틸 ────────────────────────────────────────────────────────────────
-// 앱 일정 → 구글 이벤트 (팀별 고정 시간으로 저장)
+// 앱 일정 → 구글 이벤트
 export function scheduleToGoogleEvent(s) {
   const dateStr = s.date
   const time = TEAM_TIME[s.team] || TEAM_TIME['A']
+  // 제목: "담당자 / 업무내용" 형식
+  const titlePrefix = s.member && s.member !== '미배정' ? `${s.member} / ` : ''
+  const cleanTitle = s.title ? s.title.replace(/^.+?\s*\/\s*/, '') : '새 일정'
   return {
-    summary: s.title,
+    summary: `${titlePrefix}${cleanTitle}`,
     location: s.location || '',
     description: [
-      s.memo ? `메모: ${s.memo}` : '',
-      s.phone ? `연락처: ${s.phone}` : '',
+      s.memo     ? `메모: ${s.memo}`       : '',
+      s.phone    ? `연락처: ${s.phone}`    : '',
       `팀: ${s.team}팀`,
-      `담당자: ${s.member}`,
-      `상태: ${s.status}`,
+      `담당자: ${s.member || '미배정'}`,
+      `상태: ${s.status || '예정'}`,
     ].filter(Boolean).join('\n'),
-    // 구글 캘린더에도 팀 고정 시간으로 저장
     start: { dateTime: `${dateStr}T${time.start}:00`, timeZone: 'Asia/Seoul' },
     end:   { dateTime: `${dateStr}T${time.end}:00`,   timeZone: 'Asia/Seoul' },
   }
 }
 
-// 구글 이벤트 → 앱 일정 (시간으로 팀 자동 판별 + 고정 시간 적용)
+// 구글 이벤트 → 앱 일정
 export function googleEventToSchedule(event, nextId) {
   const startDt = event.start?.dateTime || event.start?.date
-  const date = startDt ? startDt.slice(0, 10) : ''
+  // 날짜: 한국 시간 기준으로 파싱
+  let date = ''
+  if (event.start?.dateTime) {
+    // dateTime은 ISO 8601 형식, 한국 시간대로 변환
+    const d = new Date(event.start.dateTime)
+    // 한국 시간(UTC+9)으로 날짜 추출
+    const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000)
+    date = kst.toISOString().slice(0, 10)
+  } else if (event.start?.date) {
+    date = event.start.date
+  }
 
-  // 구글 이벤트 시작 시간으로 팀 판별
-  const rawStart = event.start?.dateTime
-    ? new Date(event.start.dateTime).toTimeString().slice(0, 5)
-    : '09:00'
+  // 시작 시간 (한국 시간 기준)
+  let rawStart = '09:00'
+  if (event.start?.dateTime) {
+    const d = new Date(event.start.dateTime)
+    const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000)
+    rawStart = kst.toISOString().slice(11, 16)
+  }
 
   // description에서 팀 정보 우선 파싱, 없으면 시간으로 판별
   const desc = event.description || ''
   const teamMatch = desc.match(/팀:\s*([ABCD])팀/)
   const team = teamMatch ? teamMatch[1] : detectTeamByTime(rawStart)
-
-  // 팀 고정 시간 적용 (구글에서 임의 시간으로 들어와도 정규화)
   const fixedTime = TEAM_TIME[team]
 
-  // 제목에서 담당자 파싱
+  // 제목에서 담당자 파싱 ("담당자 / 업무내용" 형식)
   const title = event.summary || '새 일정'
-  const memberMatch = title.match(/^(.+?)\s*\//)
-  const member = memberMatch ? memberMatch[1].trim() : '미배정'
+  const slashIdx = title.indexOf(' / ')
+  let member = '미배정'
+  let cleanTitle = title
+  if (slashIdx > 0) {
+    member = title.slice(0, slashIdx).trim()
+    cleanTitle = title.slice(slashIdx + 3).trim()
+  }
+
+  // description에서 담당자 재확인
+  const memberMatch = desc.match(/담당자:\s*(.+?)(?:\n|$)/)
+  if (memberMatch && memberMatch[1] !== '미배정') member = memberMatch[1].trim()
 
   const statusMatch = desc.match(/상태:\s*(\S+)/)
   const status = statusMatch ? statusMatch[1] : '예정'
   const memoMatch = desc.match(/메모:\s*(.+?)(?:\n|$)/)
-  const memo = memoMatch ? memoMatch[1] : ''
+  const memo = memoMatch ? memoMatch[1].trim() : ''
   const phoneMatch = desc.match(/연락처:\s*(.+?)(?:\n|$)/)
-  const phone = phoneMatch ? phoneMatch[1] : ''
+  const phone = phoneMatch ? phoneMatch[1].trim() : ''
 
   return {
     id: nextId,
     googleEventId: event.id,
     team,
     member,
-    title,
+    title: cleanTitle,
     date,
-    start: fixedTime.start,  // 팀 고정 시간 적용
-    end: fixedTime.end,       // 팀 고정 시간 적용
+    start: fixedTime.start,
+    end: fixedTime.end,
     location: event.location || '',
     phone,
     status,

@@ -125,7 +125,12 @@ export default function SyncPage() {
   const handleSignIn = async () => {
     setLoading(true)
     try {
-      await signIn(true)
+      // 먼저 팝업 없이 시도, 실패 시 동의 화면 표시
+      try {
+        await signIn(false) // prompt: 'none'
+      } catch {
+        await signIn(true)  // prompt: 'consent' (fallback)
+      }
       setSignedIn(true)
       actions.setGoogleConnected(true)
       const cals = await listCalendars()

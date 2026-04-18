@@ -64,7 +64,8 @@ export default function SyncPage() {
     if (!selectedCalId) { alert('캘린더를 선택하거나 ID를 입력하세요.'); return }
     setLoading(true)
     try {
-      const events = await fetchEvents(selectedCalId)
+      const today = dayjs().format('YYYY-MM-DD')
+      const events = await fetchEvents(selectedCalId, today)
       let nextId = Math.max(...state.schedules.map(s => s.id), 0) + 1
       const mapped = events.map(ev => {
         const s = googleEventToSchedule(ev, nextId)
@@ -80,7 +81,8 @@ export default function SyncPage() {
         ok: true,
       })
     } catch (e) {
-      actions.addSyncLog({ time: dayjs().format('HH:mm'), type: 'import', msg: `가져오기 실패: ${e.message || e}`, ok: false })
+      const errMsg = e?.result?.error?.message || e?.message || JSON.stringify(e)
+      actions.addSyncLog({ time: dayjs().format('HH:mm'), type: 'import', msg: `가져오기 실패: ${errMsg}`, ok: false })
     }
     setLoading(false)
   }

@@ -126,14 +126,15 @@ function reducer(state, action) {
 
         if (existing) {
           // ★ 핵심: 앱에서 수정한 내용을 모두 보존
-          // 날짜(미루기), 상태, 담당자, 메모, 연락처, originalDate 모두 앱 데이터 우선
+          // 날짜(미루기), 상태, 담당자, 연락처, originalDate 모두 앱 데이터 우선
+          // 메모: 구글 캘린더에 메모가 있으면 구글 우선, 없으면 앱 메모 유지
           return {
             ...ev,                          // 구글 기본 데이터 (title, location 등)
             id: existing.id,                // 기존 ID 유지
-            date: existing.date,            // ★ 미뤄진 날짜 보존
+            date: existing.date,            // ★ 미룤진 날짜 보존
             status: existing.status,        // ★ 상태 보존 (완료, 특이 등)
             member: existing.member,        // 담당자 보존
-            memo: existing.memo,            // 메모 보존
+            memo: ev.memo || existing.memo, // 구글에 메모 있으면 구글 우선, 없으면 앱 메모 유지
             phone: existing.phone,          // 연락처 보존
             originalDate: existing.originalDate, // ★ 원래 날짜 보존
           }

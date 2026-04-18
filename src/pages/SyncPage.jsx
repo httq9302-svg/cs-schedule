@@ -98,7 +98,9 @@ export default function SyncPage() {
         const endMin = 30
         const statusTag = s.status === '완료' ? '[완료] ' : s.status === '특이' ? '[특이] ' : s.status === '진행중' ? '[진행중] ' : ''
         const colorId = s.status === '완료' ? '8' : s.status === '특이' ? '11' : s.status === '진행중' ? '5' : undefined
-        const baseTitle = s.member && s.member !== '미배정' ? `${s.member} / ${s.title}` : s.title
+        // 담당자 이름이 이미 title 앞에 포함된 경우 중복 방지
+        const titleAlreadyHasMember = s.member && s.member !== '미배정' && s.title.startsWith(`${s.member} / `)
+        const baseTitle = s.member && s.member !== '미배정' && !titleAlreadyHasMember ? `${s.member} / ${s.title}` : s.title
         const eventBody = {
           summary: `${statusTag}${baseTitle}`,
           ...(colorId ? { colorId } : {}),

@@ -127,10 +127,23 @@ export function googleEventToSchedule(event) {
   // 상태, 메모, 연락처 파싱
   const statusMatch = desc.match(/상태:\s*(\S+)/)
   const status = statusMatch ? statusMatch[1] : '예정'
-  const memoMatch = desc.match(/메모:\s*(.+?)(?:\n|$)/)
-  const memo = memoMatch ? memoMatch[1].trim() : ''
   const phoneMatch = desc.match(/연락처:\s*(.+?)(?:\n|$)/)
   const phone = phoneMatch ? phoneMatch[1].trim() : ''
+
+  // 메모 파싱: "메모: xxx" 형식 우선
+  // 없으면 description에서 앱이 생성한 필드들(팀, 담당자, 상태, 연락처)을 제외한 나머지를 메모로 처리
+  let memo = ''
+  const memoMatch = desc.match(/메모:\s*(.+?)(?:\n|$)/)
+  if (memoMatch) {
+    memo = memoMatch[1].trim()
+  } else {
+    // 앱이 생성한 필드가 아닌 내용이 있으면 메모로 처리
+    const isAppGenerated = /팀:\s*[ABCD]팀/.test(desc) || /담당자:\s*/.test(desc) || /상태:\s*/.test(desc)
+    if (!isAppGenerated && desc.trim()) {
+      // 앱이 생성한 형식이 아닌 순수 구글 캘린더 메모
+      memo = desc.trim()
+    }
+  }
 
   return {
     id: event.id,                  // 임시 ID (importFromGoogle에서 덮어씀)

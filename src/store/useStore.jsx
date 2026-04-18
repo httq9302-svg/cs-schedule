@@ -105,14 +105,28 @@ function reducer(state, action) {
       return { ...state, googleConnected: action.connected }
     case 'IMPORT_FROM_GOOGLE': {
       const incoming = action.events
-      const existing = state.schedules.filter(s => !s.googleEventId)
-      const merged = [...existing, ...incoming]
-      const log = { time: dayjs().format('HH:mm'), type: 'import', msg: `가져오기 완료 (${incoming.length}개)`, ok: true }
+      // 기존 일정에서 구글 eventId가 있는 것들의 수정 플래그 확인
+      const existingMap = {}
+      state.schedules.forEach(s => {
+        if (s.googleEventId) existingMap[s.googleEventId] = s
+      })
+      // 스마트 머지: 구글 이벤트와 매칭되는 기존 일정은 수정된 내용 유지
+      const merged = incoming.map(ev => {
+        const existing = existingMap[ev.googleEventId]
+        if (existing) {
+          // 이미 앱에 있는 일정 → 앱에서 수정한 내용 우선 보존
+          // 구글에서 다시 가져와도 상태/담당자/메모등 앱 수정사항 유지
+          return { ...ev, id: existing.id, status: existing.status, member: existing.member, memo: existing.memo, phone: existing.phone }
+        }
+        return ev
+      })
+      // 구글 eventId 없는 일정(앞에서 직접 추가한 것)들도 유지
+      const localOnly = state.schedules.filter(s => !s.googleEventId)
+      const all = [...localOnly, ...merged]
       return {
         ...state,
-        schedules: merged,
-        syncLogs: [log, ...state.syncLogs].slice(0, 20),
-        nextId: Math.max(...merged.map(s => s.id), state.nextId) + 1,
+        schedules: all,
+        nextId: Math.max(...all.map(s => s.id), state.nextId) + 1,
       }
     }
     case 'ADD_SYNC_LOG':

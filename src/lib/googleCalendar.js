@@ -16,6 +16,7 @@ const SCOPES = 'https://www.googleapis.com/auth/calendar'
 let gapiInited = false
 let gisInited = false
 let tokenClient = null
+const TOKEN_STORAGE_KEY = 'cs_google_token_v1'
 
 // ── 팀별 고정 시간 (회사 룰) ─────────────────────────────────────────────────
 const TEAM_TIME = {
@@ -73,15 +74,39 @@ function loadScript(src) {
 }
 
 // ─── 로그인 ───────────────────────────────────────────────────────────────────
-export function signIn() {
+export function signIn(forceConsent = false) {
   return new Promise((resolve, reject) => {
     if (!tokenClient) { reject(new Error('초기화 필요')); return }
     tokenClient.callback = (resp) => {
-      if (resp.error) reject(resp)
-      else resolve(resp)
+      if (resp.error) { reject(resp); return }
+      // 토큰 만료 시간 저장 (1시간)
+      const expiry = Date.now() + (resp.expires_in || 3600) * 1000
+      try { localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify({ expiry })) } catch {}
+      resolve(resp)
     }
-    tokenClient.requestAccessToken({ prompt: 'consent' })
+    // 이미 토큰 있으면 prompt 없이 조용히 갱신
+    tokenClient.requestAccessToken({ prompt: forceConsent ? 'consent' : '' })
   })
+}
+
+// 토큰 만료 여부 확인 후 자동 갱신
+export async function ensureToken() {
+  const token = window.gapi?.client?.getToken()
+  if (token) return // 이미 유효한 토큰 있음
+  // 저장된 만료 시간 확인
+  try {
+    const raw = localStorage.getItem(TOKEN_STORAGE_KEY)
+    if (raw) {
+      const { expiry } = JSON.parse(raw)
+      if (Date.now() < expiry - 60000) {
+        // 아직 유효 → 팝업 없이 갱신 시도
+        await signIn(false)
+        return
+      }
+    }
+  } catch {}
+  // 만료됐거나 기록 없으면 로그인 필요
+  throw new Error('로그인이 필요합니다')
 }
 
 export function signOut() {
@@ -93,7 +118,16 @@ export function signOut() {
 }
 
 export function isSignedIn() {
-  return !!window.gapi?.client?.getToken()
+  if (window.gapi?.client?.getToken()) return true
+  // 저장된 토큰 만료 시간으로도 판단
+  try {
+    const raw = localStorage.getItem(TOKEN_STORAGE_KEY)
+    if (raw) {
+      const { expiry } = JSON.parse(raw)
+      return Date.now() < expiry - 60000
+    }
+  } catch {}
+  return false
 }
 
 // ─── 캘린더 목록 ───────────────────────────────────────────────────────────────

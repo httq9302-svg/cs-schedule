@@ -20,47 +20,62 @@ const TEAMS = [
 
 const STATUS_FILTERS = ['전체', '예정', '진행중', '완료', '익일', '특이']
 
+// 다음 평일 구하기 (토=6, 일=0 건너뜀)
+function nextWeekday(dateStr) {
+  let d = dayjs(dateStr).add(1, 'day')
+  while (d.day() === 0 || d.day() === 6) {
+    d = d.add(1, 'day')
+  }
+  return d.format('YYYY-MM-DD')
+}
+
 export default function TodayPage() {
   const { state, actions } = useStore()
   const today = dayjs().format('YYYY-MM-DD')
+  const nextWorkday = useMemo(() => nextWeekday(today), [today])
 
-  const [activeTeam, setActiveTeam] = useState('C')
+  const [activeTeam, setActiveTeam] = useState('A')
   const [statusFilter, setStatusFilter] = useState('전체')
   const [search, setSearch] = useState('')
   const [editItem, setEditItem] = useState(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [postponeItem, setPostponeItem] = useState(null)
 
-  // 오늘 일정 필터링
-  const todaySchedules = useMemo(() => {
+  // 일정 필터링
+  const displaySchedules = useMemo(() => {
     return state.schedules
-      .filter(s => s.date === today && s.team === activeTeam)
-      .filter(s => statusFilter === '전체' ? true : s.status === statusFilter)
+      .filter(s => {
+        if (s.team !== activeTeam) return false
+        if (statusFilter === '익일') return s.date === nextWorkday
+        if (statusFilter === '전체') return s.date === today || s.date === nextWorkday
+        return s.date === today && s.status === statusFilter
+      })
       .filter(s => {
         if (!search) return true
         const q = search.toLowerCase()
-        return (s.title + s.location + s.member + s.memo).toLowerCase().includes(q)
+        return (s.title + s.location + s.member + (s.memo || '')).toLowerCase().includes(q)
       })
-      .sort((a, b) => a.start.localeCompare(b.start))
-  }, [state.schedules, today, activeTeam, statusFilter, search])
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date)
+        return a.start.localeCompare(b.start)
+      })
+  }, [state.schedules, today, nextWorkday, activeTeam, statusFilter, search])
 
-  // 팀별 통계
+  // 팀별 통계 (오늘 기준)
   const stats = useMemo(() => {
     const items = state.schedules.filter(s => s.date === today && s.team === activeTeam)
+    const nextItems = state.schedules.filter(s => s.date === nextWorkday && s.team === activeTeam)
     return {
       total: items.length,
       done: items.filter(s => s.status === '완료').length,
       inProgress: items.filter(s => s.status === '진행중').length,
       issue: items.filter(s => s.status === '특이').length,
+      nextDay: nextItems.length,
     }
-  }, [state.schedules, today, activeTeam])
+  }, [state.schedules, today, nextWorkday, activeTeam])
 
   const handleComplete = (id) => actions.setStatus(id, '완료')
   const handleIssue = (id) => actions.setStatus(id, '특이')
-  const handleNavigate = (location) => {
-    if (!location) return
-    window.open(`https://map.kakao.com/link/search/${encodeURIComponent(location)}`, '_blank')
-  }
 
   const handleSave = (formData) => {
     if (formData.id) {
@@ -89,6 +104,13 @@ export default function TodayPage() {
 
   const progressPct = stats.total > 0 ? Math.round((stats.done / stats.total) * 100) : 0
 
+  // 필터별 카운트
+  const filterCount = (f) => {
+    if (f === '전체') return state.schedules.filter(s => (s.date === today || s.date === nextWorkday) && s.team === activeTeam).length
+    if (f === '익일') return state.schedules.filter(s => s.date === nextWorkday && s.team === activeTeam).length
+    return state.schedules.filter(s => s.date === today && s.team === activeTeam && s.status === f).length
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* ── 헤더 ── */}
@@ -109,14 +131,15 @@ export default function TodayPage() {
         </div>
 
         {/* 통계 칩 */}
-        <div className="flex gap-2 mb-4">
+        <div className="flex gap-2 mb-4 overflow-x-auto">
           {[
             { label: '전체', value: stats.total, color: 'bg-white/15' },
             { label: '완료', value: stats.done, color: 'bg-emerald-500/30' },
             { label: '진행중', value: stats.inProgress, color: 'bg-amber-500/30' },
             { label: '특이', value: stats.issue, color: stats.issue > 0 ? 'bg-rose-500/40' : 'bg-white/10' },
+            { label: '익일', value: stats.nextDay, color: 'bg-blue-500/30' },
           ].map(({ label, value, color }) => (
-            <div key={label} className={`${color} rounded-xl px-3 py-2 text-center min-w-[52px]`}>
+            <div key={label} className={`${color} rounded-xl px-3 py-2 text-center min-w-[52px] shrink-0`}>
               <p className="text-[10px] text-white/70 font-medium">{label}</p>
               <p className="text-lg font-bold leading-none mt-0.5">{value}</p>
             </div>
@@ -180,16 +203,16 @@ export default function TodayPage() {
         {/* 상태 필터 */}
         <div className="flex gap-1.5 overflow-x-auto pb-0.5">
           {STATUS_FILTERS.map(f => {
-            const count = f === '전체'
-              ? state.schedules.filter(s => s.date === today && s.team === activeTeam).length
-              : state.schedules.filter(s => s.date === today && s.team === activeTeam && s.status === f).length
+            const count = filterCount(f)
             return (
               <button
                 key={f}
                 onClick={() => setStatusFilter(f)}
                 className={`shrink-0 h-7 px-3 rounded-full text-xs font-semibold transition-all ${
                   statusFilter === f
-                    ? 'bg-slate-900 text-white'
+                    ? f === '익일'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-900 text-white'
                     : 'bg-slate-100 text-slate-500'
                 }`}
               >
@@ -202,8 +225,19 @@ export default function TodayPage() {
 
       {/* ── 일정 목록 ── */}
       <div className="flex-1 overflow-y-auto px-4 py-3 pb-24 space-y-3">
+        {/* 익일 일정 구분선 */}
+        {statusFilter === '전체' && displaySchedules.some(s => s.date === nextWorkday) && (
+          <div className="flex items-center gap-2 py-1">
+            <div className="flex-1 h-px bg-blue-100" />
+            <span className="text-xs text-blue-500 font-semibold shrink-0">
+              익일 ({dayjs(nextWorkday).format('M/D dddd')})
+            </span>
+            <div className="flex-1 h-px bg-blue-100" />
+          </div>
+        )}
+
         <AnimatePresence mode="popLayout">
-          {todaySchedules.length === 0 ? (
+          {displaySchedules.length === 0 ? (
             <motion.div
               key="empty"
               initial={{ opacity: 0 }}
@@ -213,21 +247,37 @@ export default function TodayPage() {
               <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mb-3">
                 <RefreshCw size={24} className="text-slate-300" />
               </div>
-              <p className="text-slate-500 font-medium">오늘 일정이 없습니다</p>
+              <p className="text-slate-500 font-medium">
+                {statusFilter === '익일' ? '익일 일정이 없습니다' : '오늘 일정이 없습니다'}
+              </p>
               <p className="text-slate-400 text-sm mt-1">+ 버튼으로 일정을 추가하세요</p>
             </motion.div>
           ) : (
-            todaySchedules.map(item => (
-              <ScheduleCard
-                key={item.id}
-                item={item}
-                onTap={handleTapCard}
-                onComplete={handleComplete}
-                onPostpone={(item) => setPostponeItem(item)}
-                onIssue={handleIssue}
-                onNavigate={handleNavigate}
-              />
-            ))
+            displaySchedules.map((item, idx) => {
+              // 전체 탭에서 오늘/익일 구분선
+              const prevItem = displaySchedules[idx - 1]
+              const showDivider = statusFilter === '전체' && item.date === nextWorkday && (!prevItem || prevItem.date === today)
+              return (
+                <div key={item.id}>
+                  {showDivider && (
+                    <div className="flex items-center gap-2 py-2">
+                      <div className="flex-1 h-px bg-blue-100" />
+                      <span className="text-xs text-blue-500 font-semibold shrink-0">
+                        ↓ 익일 ({dayjs(nextWorkday).format('M/D dddd')})
+                      </span>
+                      <div className="flex-1 h-px bg-blue-100" />
+                    </div>
+                  )}
+                  <ScheduleCard
+                    item={item}
+                    onTap={handleTapCard}
+                    onComplete={handleComplete}
+                    onPostpone={(item) => setPostponeItem(item)}
+                    onIssue={handleIssue}
+                  />
+                </div>
+              )
+            })
           )}
         </AnimatePresence>
       </div>

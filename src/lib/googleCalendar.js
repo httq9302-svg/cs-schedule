@@ -153,7 +153,7 @@ export async function fetchEvents(calendarId, dateStr) {
   return res.result.items || []
 }
 
-// ─── 날짜 범위 이벤트 조회 (가져오기 범위 확장용) ─────────────────────────────
+// ─── 날짜 범위 이벤트 조회 ────────────────────────────────────────────────────
 export async function fetchEventsRange(calendarId, startDate, endDate) {
   await ensureValidToken()
   const timeMin = `${startDate}T00:00:00+09:00`
@@ -168,6 +168,27 @@ export async function fetchEventsRange(calendarId, startDate, endDate) {
     timeZone: 'Asia/Seoul',
   })
   return res.result.items || []
+}
+
+// ─── 전체 이벤트 조회 (페이지네이션 포함) ────────────────────────────────────
+export async function fetchAllEvents(calendarId) {
+  await ensureValidToken()
+  let allItems = []
+  let pageToken = undefined
+  do {
+    const params = {
+      calendarId,
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
+      timeZone: 'Asia/Seoul',
+    }
+    if (pageToken) params.pageToken = pageToken
+    const res = await window.gapi.client.calendar.events.list(params)
+    allItems = allItems.concat(res.result.items || [])
+    pageToken = res.result.nextPageToken
+  } while (pageToken)
+  return allItems
 }
 
 // ─── 이벤트 생성 ───────────────────────────────────────────────────────────────

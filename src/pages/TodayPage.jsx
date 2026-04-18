@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Plus, Search, X, RefreshCw } from 'lucide-react'
+import { Plus, Search, X, RefreshCw, CalendarDays } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import dayjs from 'dayjs'
 import 'dayjs/locale/ko'
@@ -41,14 +41,36 @@ export default function TodayPage() {
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [postponeItem, setPostponeItem] = useState(null)
 
-  // 일정 필터링
+  // ── 일정 분류 ──────────────────────────────────────────────────────────────
+  // "오늘 날짜였다가 미뤄진 일정" = 원래 오늘이었으나 다른 날짜로 변경된 것
+  // → 구글에서 가져온 일정 중 오늘 날짜가 아닌 것 + 앱에서 미루기 처리된 것
+  // 실용적 기준: originalDate가 오늘인 것 OR status가 '익일'이었다가 날짜가 바뀐 것
+  // → 가장 명확한 방법: 앱에서 미루기(postpone)된 일정은 originalDate를 저장
+  // 현재 구조에서는 originalDate 필드가 없으므로:
+  // "오늘 탭에 보여야 할 일정" = 오늘 날짜 일정 + 다음 평일 일정 + 미뤄진 일정(originalDate === today)
+  // originalDate가 없는 경우 → 날짜가 오늘 이후이고 status가 '예정'/'익일'인 것 중
+  // googleEventId가 없는 것(앱에서 직접 미룬 것)을 포함
+  // 가장 명확한 방법: postponeSchedule 시 originalDate 저장
+
   const displaySchedules = useMemo(() => {
     return state.schedules
       .filter(s => {
         if (s.team !== activeTeam) return false
-        if (statusFilter === '익일') return s.date === nextWorkday
-        if (statusFilter === '전체') return s.date === today || s.date === nextWorkday
-        return s.date === today && s.status === statusFilter
+
+        const isToday = s.date === today
+        const isNextWorkday = s.date === nextWorkday
+        // 미뤄진 일정: originalDate가 오늘인 것
+        const isPostponedFromToday = s.originalDate === today
+
+        if (statusFilter === '전체') {
+          return isToday || isNextWorkday || isPostponedFromToday
+        }
+        if (statusFilter === '익일') {
+          // 익일 탭: 다음 평일 일정 + 오늘에서 미뤄진 일정(날짜 무관)
+          return isNextWorkday || isPostponedFromToday
+        }
+        // 나머지 상태 필터: 오늘 일정만
+        return isToday && s.status === statusFilter
       })
       .filter(s => {
         if (!search) return true
@@ -56,21 +78,26 @@ export default function TodayPage() {
         return (s.title + s.location + s.member + (s.memo || '')).toLowerCase().includes(q)
       })
       .sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date)
+        // 오늘 → 다음 평일 → 그 이후 순
+        const aOrder = a.date === today ? 0 : a.date === nextWorkday ? 1 : 2
+        const bOrder = b.date === today ? 0 : b.date === nextWorkday ? 1 : 2
+        if (aOrder !== bOrder) return aOrder - bOrder
         return a.start.localeCompare(b.start)
       })
   }, [state.schedules, today, nextWorkday, activeTeam, statusFilter, search])
 
-  // 팀별 통계 (오늘 기준)
+  // ── 통계 (오늘 기준) ──────────────────────────────────────────────────────
   const stats = useMemo(() => {
-    const items = state.schedules.filter(s => s.date === today && s.team === activeTeam)
+    const todayItems = state.schedules.filter(s => s.date === today && s.team === activeTeam)
     const nextItems = state.schedules.filter(s => s.date === nextWorkday && s.team === activeTeam)
+    const postponedItems = state.schedules.filter(s => s.originalDate === today && s.team === activeTeam)
     return {
-      total: items.length,
-      done: items.filter(s => s.status === '완료').length,
-      inProgress: items.filter(s => s.status === '진행중').length,
-      issue: items.filter(s => s.status === '특이').length,
-      nextDay: nextItems.length,
+      total: todayItems.length,
+      done: todayItems.filter(s => s.status === '완료').length,
+      inProgress: todayItems.filter(s => s.status === '진행중').length,
+      issue: todayItems.filter(s => s.status === '특이').length,
+      // 익일 카운트: 다음 평일 일정 + 오늘에서 미뤄진 일정
+      nextDay: nextItems.length + postponedItems.length,
     }
   }, [state.schedules, today, nextWorkday, activeTeam])
 
@@ -106,9 +133,25 @@ export default function TodayPage() {
 
   // 필터별 카운트
   const filterCount = (f) => {
-    if (f === '전체') return state.schedules.filter(s => (s.date === today || s.date === nextWorkday) && s.team === activeTeam).length
-    if (f === '익일') return state.schedules.filter(s => s.date === nextWorkday && s.team === activeTeam).length
-    return state.schedules.filter(s => s.date === today && s.team === activeTeam && s.status === f).length
+    const teamItems = state.schedules.filter(s => s.team === activeTeam)
+    if (f === '전체') {
+      return teamItems.filter(s =>
+        s.date === today || s.date === nextWorkday || s.originalDate === today
+      ).length
+    }
+    if (f === '익일') {
+      return teamItems.filter(s =>
+        s.date === nextWorkday || s.originalDate === today
+      ).length
+    }
+    return teamItems.filter(s => s.date === today && s.status === f).length
+  }
+
+  // 날짜 그룹 라벨
+  const getDateLabel = (date) => {
+    if (date === today) return null // 오늘은 라벨 없음
+    if (date === nextWorkday) return `다음 평일 (${dayjs(nextWorkday).format('M/D ddd')})`
+    return `${dayjs(date).format('M/D ddd')} (미뤄진 일정)`
   }
 
   return (
@@ -137,7 +180,7 @@ export default function TodayPage() {
             { label: '완료', value: stats.done, color: 'bg-emerald-500/30' },
             { label: '진행중', value: stats.inProgress, color: 'bg-amber-500/30' },
             { label: '특이', value: stats.issue, color: stats.issue > 0 ? 'bg-rose-500/40' : 'bg-white/10' },
-            { label: '익일', value: stats.nextDay, color: 'bg-blue-500/30' },
+            { label: '익일+', value: stats.nextDay, color: 'bg-blue-500/30' },
           ].map(({ label, value, color }) => (
             <div key={label} className={`${color} rounded-xl px-3 py-2 text-center min-w-[52px] shrink-0`}>
               <p className="text-[10px] text-white/70 font-medium">{label}</p>
@@ -184,7 +227,6 @@ export default function TodayPage() {
 
       {/* ── 검색 + 상태 필터 ── */}
       <div className="bg-white px-4 py-3 space-y-2.5 shrink-0 border-b border-slate-100">
-        {/* 검색 */}
         <div className="relative">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <input
@@ -200,7 +242,6 @@ export default function TodayPage() {
           )}
         </div>
 
-        {/* 상태 필터 */}
         <div className="flex gap-1.5 overflow-x-auto pb-0.5">
           {STATUS_FILTERS.map(f => {
             const count = filterCount(f)
@@ -225,17 +266,6 @@ export default function TodayPage() {
 
       {/* ── 일정 목록 ── */}
       <div className="flex-1 overflow-y-auto px-4 py-3 pb-24 space-y-3">
-        {/* 익일 일정 구분선 */}
-        {statusFilter === '전체' && displaySchedules.some(s => s.date === nextWorkday) && (
-          <div className="flex items-center gap-2 py-1">
-            <div className="flex-1 h-px bg-blue-100" />
-            <span className="text-xs text-blue-500 font-semibold shrink-0">
-              익일 ({dayjs(nextWorkday).format('M/D dddd')})
-            </span>
-            <div className="flex-1 h-px bg-blue-100" />
-          </div>
-        )}
-
         <AnimatePresence mode="popLayout">
           {displaySchedules.length === 0 ? (
             <motion.div
@@ -245,7 +275,7 @@ export default function TodayPage() {
               className="flex flex-col items-center justify-center py-16 text-center"
             >
               <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mb-3">
-                <RefreshCw size={24} className="text-slate-300" />
+                <CalendarDays size={24} className="text-slate-300" />
               </div>
               <p className="text-slate-500 font-medium">
                 {statusFilter === '익일' ? '익일 일정이 없습니다' : '오늘 일정이 없습니다'}
@@ -253,31 +283,42 @@ export default function TodayPage() {
               <p className="text-slate-400 text-sm mt-1">+ 버튼으로 일정을 추가하세요</p>
             </motion.div>
           ) : (
-            displaySchedules.map((item, idx) => {
-              // 전체 탭에서 오늘/익일 구분선
-              const prevItem = displaySchedules[idx - 1]
-              const showDivider = statusFilter === '전체' && item.date === nextWorkday && (!prevItem || prevItem.date === today)
-              return (
-                <div key={item.id}>
-                  {showDivider && (
-                    <div className="flex items-center gap-2 py-2">
-                      <div className="flex-1 h-px bg-blue-100" />
-                      <span className="text-xs text-blue-500 font-semibold shrink-0">
-                        ↓ 익일 ({dayjs(nextWorkday).format('M/D dddd')})
-                      </span>
-                      <div className="flex-1 h-px bg-blue-100" />
-                    </div>
-                  )}
-                  <ScheduleCard
-                    item={item}
-                    onTap={handleTapCard}
-                    onComplete={handleComplete}
-                    onPostpone={(item) => setPostponeItem(item)}
-                    onIssue={handleIssue}
-                  />
-                </div>
-              )
-            })
+            (() => {
+              // 날짜 그룹별로 구분선 삽입
+              let lastDate = null
+              return displaySchedules.map((item, idx) => {
+                const showDivider = item.date !== lastDate && lastDate !== null
+                const isGroupStart = item.date !== lastDate
+                lastDate = item.date
+                const label = getDateLabel(item.date)
+
+                return (
+                  <div key={item.id}>
+                    {isGroupStart && label && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="flex items-center gap-2 py-1"
+                      >
+                        <div className="flex-1 h-px bg-blue-100" />
+                        <span className="text-xs text-blue-500 font-semibold shrink-0 flex items-center gap-1">
+                          <CalendarDays size={11} />
+                          {label}
+                        </span>
+                        <div className="flex-1 h-px bg-blue-100" />
+                      </motion.div>
+                    )}
+                    <ScheduleCard
+                      item={item}
+                      onTap={handleTapCard}
+                      onComplete={handleComplete}
+                      onPostpone={(item) => setPostponeItem(item)}
+                      onIssue={handleIssue}
+                    />
+                  </div>
+                )
+              })
+            })()
           )}
         </AnimatePresence>
       </div>

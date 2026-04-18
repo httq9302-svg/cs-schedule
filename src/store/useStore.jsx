@@ -19,16 +19,16 @@ const TEAM_LABELS = {
 function todayStr() { return dayjs().format('YYYY-MM-DD') }
 
 const SAMPLE_SCHEDULES = [
-  { id: 1, team: 'A', member: '김대리', title: '김대리 / 성수 신규 설치', date: todayStr(), start: '09:00', end: '09:40', location: '서울 성동구 성수이로 100', phone: '010-1234-5678', status: '예정', memo: '장비 세팅 및 초기 교육', googleEventId: null },
-  { id: 2, team: 'A', member: '이주임', title: '이주임 / 강동 A/S', date: todayStr(), start: '10:00', end: '10:40', location: '서울 강동구 천호대로 222', phone: '010-5555-1212', status: '진행중', memo: '출력 오류 점검', googleEventId: null },
-  { id: 3, team: 'B', member: '박사원', title: '박사원 / 분당 정기 점검', date: todayStr(), start: '12:00', end: '12:40', location: '경기 성남시 분당구 판교역로 50', phone: '010-7777-9999', status: '예정', memo: '월간 순회', googleEventId: null },
-  { id: 4, team: 'C', member: '최대리', title: '최대리 / 강남 고객사 점검', date: todayStr(), start: '15:00', end: '15:40', location: '서울 강남구 테헤란로 10', phone: '010-1010-1111', status: '예정', memo: '정기 방문', googleEventId: null },
-  { id: 5, team: 'C', member: '한과장', title: '한과장 / 잠실 긴급 장애', date: todayStr(), start: '15:30', end: '16:10', location: '서울 송파구 석촌호수로 88', phone: '010-2323-9898', status: '특이', memo: '네트워크 연결 불가 - 긴급 대응', googleEventId: null },
-  { id: 6, team: 'C', member: '오주임', title: '오주임 / 문정 업그레이드', date: todayStr(), start: '16:20', end: '17:10', location: '서울 송파구 법원로 120', phone: '010-4545-7878', status: '완료', memo: '펌웨어 업그레이드 완료', googleEventId: null },
-  { id: 7, team: 'D', member: '미배정', title: '인천 야간 점검', date: todayStr(), start: '18:00', end: '18:50', location: '인천 연수구 센트럴로 123', phone: '010-3030-2121', status: '예정', memo: '종료 전 체크', googleEventId: null },
+  { id: 1, team: 'A', member: '김대리', title: '김대리 / 성수 신규 설치', date: todayStr(), start: '09:00', end: '09:30', location: '서울 성동구 성수이로 100', phone: '010-1234-5678', status: '예정', memo: '장비 세팅 및 초기 교육', googleEventId: null, originalDate: null },
+  { id: 2, team: 'A', member: '이주임', title: '이주임 / 강동 A/S', date: todayStr(), start: '09:00', end: '09:30', location: '서울 강동구 천호대로 222', phone: '010-5555-1212', status: '진행중', memo: '출력 오류 점검', googleEventId: null, originalDate: null },
+  { id: 3, team: 'B', member: '박사원', title: '박사원 / 분당 정기 점검', date: todayStr(), start: '12:00', end: '12:30', location: '경기 성남시 분당구 판교역로 50', phone: '010-7777-9999', status: '예정', memo: '월간 순회', googleEventId: null, originalDate: null },
+  { id: 4, team: 'C', member: '최대리', title: '최대리 / 강남 고객사 점검', date: todayStr(), start: '15:00', end: '15:30', location: '서울 강남구 테헤란로 10', phone: '010-1010-1111', status: '예정', memo: '정기 방문', googleEventId: null, originalDate: null },
+  { id: 5, team: 'C', member: '한과장', title: '한과장 / 잠실 긴급 장애', date: todayStr(), start: '15:00', end: '15:30', location: '서울 송파구 석촌호수로 88', phone: '010-2323-9898', status: '특이', memo: '네트워크 연결 불가 - 긴급 대응', googleEventId: null, originalDate: null },
+  { id: 6, team: 'C', member: '오주임', title: '오주임 / 문정 업그레이드', date: todayStr(), start: '15:00', end: '15:30', location: '서울 송파구 법원로 120', phone: '010-4545-7878', status: '완료', memo: '펌웨어 업그레이드 완료', googleEventId: null, originalDate: null },
+  { id: 7, team: 'D', member: '미배정', title: '인천 야간 점검', date: todayStr(), start: '18:00', end: '18:30', location: '인천 연수구 센트럴로 123', phone: '010-3030-2121', status: '예정', memo: '종료 전 체크', googleEventId: null, originalDate: null },
 ]
 
-const STORAGE_KEY = 'cs_schedule_state_v1'
+const STORAGE_KEY = 'cs_schedule_state_v2'
 
 function loadFromStorage() {
   try {
@@ -55,7 +55,7 @@ function buildInitialState() {
 function reducer(state, action) {
   switch (action.type) {
     case 'ADD_SCHEDULE': {
-      const newItem = { ...action.payload, id: state.nextId }
+      const newItem = { ...action.payload, id: state.nextId, originalDate: action.payload.originalDate || null }
       return { ...state, schedules: [...state.schedules, newItem], nextId: state.nextId + 1 }
     }
     case 'UPDATE_SCHEDULE': {
@@ -78,9 +78,12 @@ function reducer(state, action) {
     case 'POSTPONE_SCHEDULE': {
       return {
         ...state,
-        schedules: state.schedules.map(s =>
-          s.id === action.id ? { ...s, date: action.date, status: '예정' } : s
-        ),
+        schedules: state.schedules.map(s => {
+          if (s.id !== action.id) return s
+          // originalDate: 처음 미루는 경우에만 저장 (이미 있으면 유지)
+          const originalDate = s.originalDate || s.date
+          return { ...s, date: action.date, status: '예정', originalDate }
+        }),
       }
     }
     case 'ADD_MEMBER': {
@@ -103,35 +106,67 @@ function reducer(state, action) {
       return { ...state, googleCalendarId: action.id }
     case 'SET_GOOGLE_CONNECTED':
       return { ...state, googleConnected: action.connected }
+
     case 'IMPORT_FROM_GOOGLE': {
-      const incoming = action.events
-      // 기존 일정에서 구글 eventId가 있는 것들의 수정 플래그 확인
-      const existingMap = {}
+      const incoming = action.events // 구글에서 가져온 이벤트 배열
+
+      // 기존 앱 일정을 googleEventId 기준으로 맵 생성
+      const existingByGoogleId = {}
       state.schedules.forEach(s => {
-        if (s.googleEventId) existingMap[s.googleEventId] = s
+        if (s.googleEventId) existingByGoogleId[s.googleEventId] = s
       })
-      // 스마트 머지: 구글 이벤트와 매칭되는 기존 일정은 수정된 내용 유지
-      const merged = incoming.map(ev => {
-        const existing = existingMap[ev.googleEventId]
+
+      // 구글에서 온 이벤트 처리
+      const incomingGoogleIds = new Set()
+      let nextId = Math.max(...state.schedules.map(s => s.id), state.nextId - 1) + 1
+
+      const mergedFromGoogle = incoming.map(ev => {
+        incomingGoogleIds.add(ev.googleEventId)
+        const existing = existingByGoogleId[ev.googleEventId]
+
         if (existing) {
-          // 이미 앱에 있는 일정 → 앱에서 수정한 내용 우선 보존
-          // 구글에서 다시 가져와도 상태/담당자/메모등 앱 수정사항 유지
-          return { ...ev, id: existing.id, status: existing.status, member: existing.member, memo: existing.memo, phone: existing.phone }
+          // ★ 핵심: 앱에서 수정한 내용을 모두 보존
+          // 날짜(미루기), 상태, 담당자, 메모, 연락처, originalDate 모두 앱 데이터 우선
+          return {
+            ...ev,                          // 구글 기본 데이터 (title, location 등)
+            id: existing.id,                // 기존 ID 유지
+            date: existing.date,            // ★ 미뤄진 날짜 보존
+            status: existing.status,        // ★ 상태 보존 (완료, 특이 등)
+            member: existing.member,        // 담당자 보존
+            memo: existing.memo,            // 메모 보존
+            phone: existing.phone,          // 연락처 보존
+            originalDate: existing.originalDate, // ★ 원래 날짜 보존
+          }
         }
-        return ev
+
+        // 새로운 구글 이벤트
+        const newItem = { ...ev, id: nextId }
+        nextId++
+        return newItem
       })
-      // 구글 eventId 없는 일정(앞에서 직접 추가한 것)들도 유지
+
+      // 앱에서 직접 추가한 일정 (googleEventId 없는 것) → 그대로 유지
       const localOnly = state.schedules.filter(s => !s.googleEventId)
-      const all = [...localOnly, ...merged]
+
+      // 구글에서 삭제된 이벤트는 앱에서도 제거 (선택적: 일단 유지)
+      // 현재는 구글에서 삭제해도 앱에 남아있음 → 향후 필요시 추가
+      // const deletedFromGoogle = state.schedules.filter(
+      //   s => s.googleEventId && !incomingGoogleIds.has(s.googleEventId)
+      // )
+
+      const all = [...localOnly, ...mergedFromGoogle]
+
       return {
         ...state,
         schedules: all,
         nextId: Math.max(...all.map(s => s.id), state.nextId) + 1,
       }
     }
+
     case 'ADD_SYNC_LOG':
       return { ...state, syncLogs: [action.log, ...state.syncLogs].slice(0, 20) }
     case 'RESET':
+      localStorage.removeItem(STORAGE_KEY)
       return buildInitialState()
     default:
       return state

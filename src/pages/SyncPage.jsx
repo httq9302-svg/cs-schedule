@@ -9,7 +9,7 @@ import {
   isSignedIn,
   ensureValidToken,
   listCalendars,
-  fetchEventsRange,
+  fetchAllEvents,
   createEvent,
   updateEvent,
   googleEventToSchedule,
@@ -30,23 +30,15 @@ export default function SyncPage() {
   const autoSyncTimer = useRef(null)
   const countdownTimer = useRef(null)
 
-  // ── 가져오기 핵심 로직 ────────────────────────────────────────────────────────
+  // ── 가져오기 핵심 로직 (전체 일정) ───────────────────────────────────────────
   const doImport = useCallback(async (calId, silent = false) => {
     if (!calId) return
     if (!silent) setLoading(true)
     try {
-      // 토큰 유효성 확인 (자동 갱신)
       await ensureValidToken()
 
-      // 오늘 + 내일(다음 평일 포함)까지 가져오기
-      const today = dayjs().format('YYYY-MM-DD')
-      // 다음 평일 계산
-      let nextDay = dayjs().add(1, 'day')
-      while (nextDay.day() === 0 || nextDay.day() === 6) nextDay = nextDay.add(1, 'day')
-      const nextDayStr = nextDay.format('YYYY-MM-DD')
-
-      // 오늘 ~ 다음 평일 범위로 가져오기
-      const events = await fetchEventsRange(calId, today, nextDayStr)
+      // ★ 전체 일정 가져오기 (날짜 범위 없음)
+      const events = await fetchAllEvents(calId)
 
       let nextId = Math.max(...state.schedules.map(s => s.id), 0) + 1
       const mapped = events.map(ev => {
@@ -77,7 +69,6 @@ export default function SyncPage() {
           ok: false,
         })
       }
-      // 로그인 필요 에러면 로그인 상태 초기화
       if (errMsg.includes('로그인이 필요')) {
         setSignedIn(false)
       }
@@ -111,7 +102,6 @@ export default function SyncPage() {
         setSignedIn(alreadySignedIn)
         if (alreadySignedIn) {
           try {
-            // 토큰 자동 갱신 시도
             await ensureValidToken()
             const cals = await listCalendars()
             setCalendars(cals)
@@ -121,7 +111,6 @@ export default function SyncPage() {
               startAutoSync(savedCalId)
             }
           } catch (e) {
-            // 토큰 만료 등으로 실패 시 로그인 상태 초기화
             console.warn('자동 로그인 실패:', e.message)
             setSignedIn(false)
           }
@@ -136,7 +125,7 @@ export default function SyncPage() {
   const handleSignIn = async () => {
     setLoading(true)
     try {
-      await signIn(true) // 명시적 로그인은 consent 포함
+      await signIn(true)
       setSignedIn(true)
       actions.setGoogleConnected(true)
       const cals = await listCalendars()
@@ -187,15 +176,9 @@ export default function SyncPage() {
     let successCount = 0
     let failCount = 0
 
-    // 오늘 + 다음 평일 일정만 반영
+    // ★ 전체 일정 반영 (오늘 이후 일정만, 과거 완료 일정 제외)
     const today = dayjs().format('YYYY-MM-DD')
-    let nextDay = dayjs().add(1, 'day')
-    while (nextDay.day() === 0 || nextDay.day() === 6) nextDay = nextDay.add(1, 'day')
-    const nextDayStr = nextDay.format('YYYY-MM-DD')
-
-    const targetSchedules = state.schedules.filter(
-      s => s.date === today || s.date === nextDayStr
-    )
+    const targetSchedules = state.schedules.filter(s => s.date >= today)
 
     if (targetSchedules.length === 0) {
       actions.addSyncLog({
@@ -285,6 +268,19 @@ export default function SyncPage() {
           </div>
         )}
 
+        {/* 초기화 오류 */}
+        {initError && (
+          <div className="bg-red-50 border border-red-200 rounded-2xl p-4">
+            <div className="flex gap-2">
+              <AlertTriangle size={16} className="text-red-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-red-700">초기화 오류</p>
+                <p className="text-xs text-red-600 mt-0.5">{initError}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 연결 상태 카드 */}
         <div className="bg-white rounded-2xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
@@ -303,126 +299,121 @@ export default function SyncPage() {
                       ? lastSyncTime
                         ? `연결됨 · ${lastSyncTime.format('HH:mm')} 동기화`
                         : '연결됨'
-                      : '미연결'}
+                      : '미연결'
+                    }
                   </span>
                 </div>
               </div>
             </div>
-            {apiReady && (
-              signedIn ? (
-                <button
-                  onClick={handleSignOut}
-                  className="flex items-center gap-1.5 text-xs text-slate-500 bg-slate-100 px-3 py-2 rounded-xl active:bg-slate-200"
-                >
-                  <LogOut size={13} /> 로그아웃
-                </button>
-              ) : (
-                <button
-                  onClick={handleSignIn}
-                  disabled={loading || noApiKey}
-                  className="flex items-center gap-1.5 text-xs text-white bg-slate-900 px-3 py-2 rounded-xl active:bg-slate-700 disabled:opacity-50"
-                >
-                  <LogIn size={13} /> 구글 로그인
-                </button>
-              )
-            )}
+            {signedIn ? (
+              <button
+                onClick={handleSignOut}
+                className="flex items-center gap-1.5 text-xs text-slate-500 bg-slate-100 px-3 py-1.5 rounded-xl hover:bg-slate-200 transition-colors"
+              >
+                <LogOut size={13} />
+                로그아웃
+              </button>
+            ) : null}
           </div>
 
           {/* 캘린더 선택 */}
-          {signedIn && calendars.length > 0 ? (
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5">사용할 캘린더 선택</label>
-              <select
-                value={selectedCalId}
-                onChange={e => handleCalendarChange(e.target.value)}
-                className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none"
-              >
-                <option value="">캘린더 선택...</option>
-                {calendars.map(cal => (
-                  <option key={cal.id} value={cal.id}>{cal.summary}</option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5">캘린더 ID (직접 입력)</label>
-              <input
-                value={selectedCalId}
-                onChange={e => { setSelectedCalId(e.target.value); actions.setGoogleCalendarId(e.target.value) }}
-                placeholder="team@company.com"
-                className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none"
-              />
-            </div>
-          )}
-
           {signedIn && (
-            <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
-              <RefreshCw size={11} />
-              <span>앱 실행 시 자동 가져오기 · 5분마다 자동 갱신 (오늘 + 다음 평일)</span>
+            <div className="mb-4">
+              <label className="text-xs text-slate-500 font-medium mb-1.5 block">사용할 캘린더 선택</label>
+              {calendars.length > 0 ? (
+                <select
+                  value={selectedCalId}
+                  onChange={e => handleCalendarChange(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {calendars.map(cal => (
+                    <option key={cal.id} value={cal.id}>{cal.summary}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={selectedCalId}
+                    onChange={e => setSelectedCalId(e.target.value)}
+                    placeholder="캘린더 ID (예: example@gmail.com)"
+                    className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              )}
             </div>
+          )}
+
+          {/* 로그인 버튼 */}
+          {!signedIn && apiReady && (
+            <button
+              onClick={handleSignIn}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-xl text-sm font-semibold hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50"
+            >
+              <LogIn size={16} />
+              구글 로그인
+            </button>
           )}
         </div>
 
-        {/* 동기화 액션 */}
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            onClick={handleImport}
-            disabled={loading || !signedIn}
-            className="bg-white rounded-2xl p-4 shadow-sm text-left active:bg-slate-50 disabled:opacity-40 transition-all"
-          >
-            <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center mb-3">
-              <Download size={18} className={loading ? 'text-blue-400 animate-bounce' : 'text-blue-600'} />
-            </div>
-            <p className="text-sm font-bold text-slate-900">지금 가져오기</p>
-            <p className="text-xs text-slate-400 mt-1">구글 캘린더 → 앱</p>
-          </button>
+        {/* 동기화 버튼 */}
+        {signedIn && (
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={handleImport}
+              disabled={loading || !selectedCalId}
+              className="bg-white rounded-2xl p-5 shadow-sm flex flex-col items-center gap-2 hover:bg-slate-50 active:scale-95 transition-all disabled:opacity-40"
+            >
+              <div className="w-10 h-10 bg-blue-100 rounded-2xl flex items-center justify-center">
+                <Download size={20} className="text-blue-600" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-semibold text-slate-900">가져오기</p>
+                <p className="text-xs text-slate-500 mt-0.5">구글 캘린더 → 앱</p>
+              </div>
+            </button>
 
-          <button
-            onClick={handleExport}
-            disabled={loading || !signedIn}
-            className="bg-slate-900 rounded-2xl p-4 text-left active:bg-slate-800 disabled:opacity-40 transition-all"
-          >
-            <div className="w-10 h-10 bg-white/15 rounded-xl flex items-center justify-center mb-3">
-              <Upload size={18} className="text-white" />
-            </div>
-            <p className="text-sm font-bold text-white">반영하기</p>
-            <p className="text-xs text-white/60 mt-1">앱 수정 → 구글 캘린더</p>
-          </button>
-        </div>
+            <button
+              onClick={handleExport}
+              disabled={loading || !selectedCalId}
+              className="bg-slate-900 rounded-2xl p-5 shadow-sm flex flex-col items-center gap-2 hover:bg-slate-800 active:scale-95 transition-all disabled:opacity-40"
+            >
+              <div className="w-10 h-10 bg-white/20 rounded-2xl flex items-center justify-center">
+                <Upload size={20} className="text-white" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-semibold text-white">반영하기</p>
+                <p className="text-xs text-white/60 mt-0.5">앱 수정 → 구글 캘린더</p>
+              </div>
+            </button>
+          </div>
+        )}
 
+        {/* 로딩 인디케이터 */}
         {loading && (
-          <div className="flex items-center justify-center gap-2 py-4 text-slate-500 text-sm">
-            <RefreshCw size={16} className="animate-spin" />
-            처리 중...
+          <div className="flex items-center justify-center gap-2 py-3">
+            <RefreshCw size={16} className="text-blue-500 animate-spin" />
+            <span className="text-sm text-slate-500">처리 중...</span>
           </div>
         )}
 
         {/* 동기화 기록 */}
         {state.syncLogs.length > 0 && (
-          <section>
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">동기화 기록</h2>
-            <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
-              {state.syncLogs.slice(0, 20).map((log, i) => (
-                <div key={i} className={`flex items-start gap-3 px-4 py-3 ${i > 0 ? 'border-t border-slate-50' : ''}`}>
+          <div className="bg-white rounded-2xl p-4 shadow-sm">
+            <p className="text-xs font-semibold text-slate-500 mb-3">동기화 기록</p>
+            <div className="space-y-2">
+              {state.syncLogs.map((log, i) => (
+                <div key={i} className="flex items-start gap-2">
                   {log.ok
-                    ? <CheckCircle size={15} className="text-emerald-500 shrink-0 mt-0.5" />
-                    : <AlertTriangle size={15} className="text-amber-500 shrink-0 mt-0.5" />
+                    ? <CheckCircle size={14} className="text-emerald-500 shrink-0 mt-0.5" />
+                    : <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" />
                   }
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-slate-700 leading-snug">{log.msg}</p>
-                  </div>
-                  <span className="text-xs text-slate-400 tabular-nums shrink-0">{log.time}</span>
+                  <span className="text-xs text-slate-600 flex-1">{log.msg}</span>
+                  <span className="text-xs text-slate-400 shrink-0">{log.time}</span>
                 </div>
               ))}
             </div>
-          </section>
-        )}
-
-        {/* 초기화 오류 */}
-        {initError && (
-          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-sm text-rose-700">
-            <p className="font-semibold mb-1">초기화 오류</p>
-            <p>{initError}</p>
           </div>
         )}
       </div>
